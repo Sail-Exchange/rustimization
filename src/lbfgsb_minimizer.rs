@@ -1,7 +1,8 @@
+use lbfgsb::step;
 use libc::{c_char, c_double, c_int};
 use std::ffi::CStr;
-use lbfgsb::step;
 use string::stringfy;
+
 pub struct Lbfgsb<'a> {
     n: c_int,
     m: c_int,
@@ -9,8 +10,8 @@ pub struct Lbfgsb<'a> {
     l: Vec<c_double>,
     u: Vec<c_double>,
     nbd: Vec<c_int>,
-    f: &'a Fn(&Vec<c_double>) -> c_double,
-    g: &'a Fn(&Vec<c_double>) -> Vec<c_double>,
+    f: &'a mut dyn FnMut(&Vec<c_double>) -> c_double,
+    g: &'a mut dyn FnMut(&Vec<c_double>) -> Vec<c_double>,
     factr: c_double,
     pgtol: c_double,
     wa: Vec<c_double>,
@@ -23,73 +24,80 @@ pub struct Lbfgsb<'a> {
     dsave: Vec<c_double>,
     max_iter: u32,
 }
+
 impl<'a> Lbfgsb<'a> {
-    // constructor requres three mendatory parameter which is the initial solution, function and the gradient function
-    pub fn new(xvec: &'a mut Vec<c_double>,
-               func: &'a Fn(&Vec<c_double>) -> c_double,
-               gd: &'a Fn(&Vec<c_double>) -> Vec<c_double>)
-               -> Self {
+    // Constructor with mutable function and gradient references
+    pub fn new(
+        xvec: &'a mut Vec<c_double>,
+        func: &'a mut dyn FnMut(&Vec<c_double>) -> c_double,
+        gd: &'a mut dyn FnMut(&Vec<c_double>) -> Vec<c_double>,
+    ) -> Self {
         let len = xvec.len() as i32;
-        // creating lbfgs struct
         Lbfgsb {
             n: len,
             m: 5,
             x: xvec,
-            l: vec![0.0f64;len as usize],
-            u: vec![0.0f64;len as usize],
-            nbd: vec![0;len as usize],
+            l: vec![0.0f64; len as usize],
+            u: vec![0.0f64; len as usize],
+            nbd: vec![0; len as usize],
             f: func,
             g: gd,
             factr: 0.0e0,
             pgtol: 0.0e0,
-            wa: vec![0.0f64;(2*5*len+11*5*5+5*len+8*5) as usize],
-            iwa: vec![0;3*len as usize],
-            task: vec![0;60],
+            wa: vec![0.0f64; (2 * 5 * len + 11 * 5 * 5 + 5 * len + 8 * 5) as usize],
+            iwa: vec![0; 3 * len as usize],
+            task: vec![0; 60],
             iprint: -1,
-            csave: vec![0;60],
+            csave: vec![0; 60],
             lsave: vec![0, 0, 0, 0],
-            isave: vec![0;44],
-            dsave: vec![0.0f64;29],
+            isave: vec![0; 44],
+            dsave: vec![0.0f64; 29],
             max_iter: 0,
         }
     }
-    // this function will start the optimization algorithm
+
+    // This function will start the optimization algorithm
     pub fn minimize(&mut self) {
         let mut fval = 0.0f64;
-        let mut gval = vec![0.0f64;self.x.len()];
-        let func = self.f;
-        let grad = self.g;
-        // converting fortran string "STRAT"
+        let mut gval = vec![0.0f64; self.x.len()];
+        let func = &mut self.f;
+        let grad = &mut self.g;
+
         stringfy(&mut self.task);
-        // start of the loop
+
         loop {
-            // callign the fortran routine
-            step(self.n,
-                 self.m,
-                 &mut self.x,
-                 &self.l,
-                 &self.u,
-                 &self.nbd,
-                 fval,
-                 &gval,
-                 self.factr,
-                 self.pgtol,
-                 &mut self.wa,
-                 &mut self.iwa,
-                 &mut self.task,
-                 self.iprint,
-                 &mut self.csave,
-                 &mut self.lsave,
-                 &mut self.isave,
-                 &mut self.dsave);
-            // converting to rust string
+            step(
+                self.n,
+                self.m,
+                self.x,
+                &self.l,
+                &self.u,
+                &self.nbd,
+                fval,
+                &gval,
+                self.factr,
+                self.pgtol,
+                &mut self.wa,
+                &mut self.iwa,
+                &mut self.task,
+                self.iprint,
+                &mut self.csave,
+                &mut self.lsave,
+                &mut self.isave,
+                &mut self.dsave,
+            );
+
             let tsk = unsafe { CStr::from_ptr(self.task.as_ptr()).to_string_lossy() };
+
             if &tsk[0..2] == "FG" {
                 fval = func(self.x);
                 gval = grad(self.x);
             }
-            if &tsk[0..5] == "NEW_X" && self.max_iter == 0 &&
-               self.dsave[11] <= 1.0e-10 * (1.0e0 + fval.abs()) {
+
+            if &tsk[0..5] == "NEW_X"
+                && self.max_iter == 0
+                && self.dsave[11] <= 1.0e-10 * (1.0e0 + fval.abs())
+            {
                 println!("THE PROJECTED GRADIENT IS SUFFICIENTLY SMALL");
                 break;
             }
@@ -109,6 +117,7 @@ impl<'a> Lbfgsb<'a> {
             }
         }
     }
+
     // this function returns the solution after minimization
     pub fn get_x(&self) -> Vec<c_double> {
         self.x.clone()
@@ -119,11 +128,7 @@ impl<'a> Lbfgsb<'a> {
             println!("variable already has Lower Bound");
         } else {
             let temp = self.nbd[index] - 1;
-            self.nbd[index] = if temp < 0 {
-                -temp
-            } else {
-                temp
-            };
+            self.nbd[index] = if temp < 0 { -temp } else { temp };
             self.l[index] = value;
         }
     }
